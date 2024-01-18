@@ -1,5 +1,5 @@
 import { useCallback } from "react";
-import Canvas from "../utils/canvas";
+import Canvas from "../components/Canvas";
 
 export default function TwoD() {
   const draw = useCallback((ctx: CanvasRenderingContext2D, frameCount: number) => {

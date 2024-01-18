@@ -1,10 +1,7 @@
 import { useEffect, useRef } from "react"
 
-type DrawFunc = (ctx: CanvasRenderingContext2D, frameCount: number) => void
-type CanvasProps = {
-  draw: DrawFunc
-}
-export function useCanvas(draw: DrawFunc) {
+export type DrawFunc = (ctx: CanvasRenderingContext2D, frameCount: number) => void
+export default function useCanvas(draw: DrawFunc) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -26,9 +23,4 @@ export function useCanvas(draw: DrawFunc) {
   }, [draw])
 
   return canvasRef
-}
-
-export default function Canvas({ draw }: CanvasProps) {
-  const canvasRef = useCanvas(draw)
-  return <canvas ref={canvasRef} />
 }
