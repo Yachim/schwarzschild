@@ -1,0 +1,2 @@
+export const lightSpeed = 299_792_458
+export const gravityConstant = 6.6743e-11
