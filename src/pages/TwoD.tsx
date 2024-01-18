@@ -1,9 +1,12 @@
-import { useCallback } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Canvas from "../components/Canvas";
 import { drawArrow } from "../utils/canvasUtils";
 import { geodesicStep, timeVelocity } from "../utils/geodesics";
-import { Vec } from "../utils/numericalDEs";
-import { gravityConstant, lightSpeed } from "../utils/constants";
+import { timeConversionFactor, useFrequency, useLength, useTime, useVelocity } from "../utils/units";
+import { BlockMath, InlineMath } from 'react-katex'
+import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
+import { faPause, faPlay } from "@fortawesome/free-solid-svg-icons";
+import { faStop } from "@fortawesome/free-solid-svg-icons/faStop";
 
 const coordsColor = "#bfbaba"
 const rUnit = 75
@@ -13,44 +16,103 @@ const rotationPeriod = 3
 const spinning = false
 const planetColor = "#0000ff"
 
-const planetTFreeFall = 0
-const planetRFreeFall = 4
-const planetPhiFreeFall = 0
-
-const planetRVelFreeFall = 0
-const planetPhiVelFreeFall = 0
-const planetTVelFreeFall = timeVelocity([planetRFreeFall, planetPhiFreeFall], [planetRVelFreeFall, planetPhiVelFreeFall])
-
-type State = {
-  coords: Vec
-  velocities: Vec
-}
-
-const initialStateFreeFall: State = {
-  coords: [planetTFreeFall, planetRFreeFall, planetPhiFreeFall],
-  velocities: [planetTVelFreeFall, planetRVelFreeFall, planetPhiVelFreeFall],
-}
-
-const planetTOrbit = 0
-const planetROrbit = 4
-const planetPhiOrbit = 0
-
-const planetRVelOrbit = 0
-const planetPhiVelOrbit = Math.sqrt(planetROrbit - 3) / (planetROrbit * (planetROrbit - 3))
-const planetTVelOrbit = timeVelocity([planetROrbit, planetPhiOrbit], [planetRVelOrbit, planetPhiVelOrbit])
-
-const initialStateOrbit: State = {
-  coords: [planetTOrbit, planetROrbit, planetPhiOrbit],
-  velocities: [planetTVelOrbit, planetRVelOrbit, planetPhiVelOrbit]
-}
-
-const initialState = initialStateFreeFall
-
 export default function TwoD() {
-  const draw = useCallback((ctx: CanvasRenderingContext2D, t: number, dt: number, {
-    coords,
-    velocities,
-  }: State) => {
+  const [playState, setPlayState] = useState<"playing" | "paused" | "stopped">("stopped")
+  const [mass, setMass] = useState(100)
+  const [frequency, setFrequency] = useState(30)
+  const [timeScale, setTimeScale] = useState(1)
+  const interval = useMemo(() => 1 / frequency, [frequency])
+  const timeStep = useMemo(() => interval / timeConversionFactor(mass), [interval, mass])
+
+  const {
+    si: siT,
+    setSi: setSiT,
+    geo: geoT,
+    setGeo: setGeoT,
+  } = useTime(0, mass)
+  const {
+    si: siR,
+    setSi: setSiR,
+    geo: geoR,
+    setGeo: setGeoR,
+  } = useLength(4, mass, true)
+  const [phi, setPhi] = useState(0)
+
+  const {
+    si: siRVel,
+    setSi: setSiRVel,
+    geo: geoRVel,
+    setGeo: setGeoRVel,
+  } = useVelocity(0)
+  const {
+    si: siPhiVel,
+    setSi: setSiPhiVel,
+    geo: geoPhiVel,
+    setGeo: setGeoPhiVel,
+  } = useFrequency(0, mass)
+  const [tVel, setTVel] = useState(timeVelocity(geoR, [geoRVel, geoPhiVel]))
+  useEffect(() => {
+    setTVel(timeVelocity(geoR, [geoRVel, geoPhiVel]))
+  }, [geoR, geoRVel, geoPhiVel])
+
+  const [initialGeoT, setInitialGeoT] = useState(0)
+  const [initialGeoR, setInitialGeoR] = useState(0)
+  const [initialPhi, setInitialPhi] = useState(0)
+  const [initialTVel, setInitialTVel] = useState(0)
+  const [initialGeoRVel, setInitialGeoRVel] = useState(0)
+  const [initialGeoPhiVel, setInitialGeoPhiVel] = useState(0)
+
+  useEffect(() => {
+    if (playState !== "stopped") return
+
+    setInitialGeoT(geoT)
+    setInitialGeoR(geoR)
+    setInitialPhi(phi)
+    setInitialTVel(tVel)
+    setInitialGeoRVel(geoRVel)
+    setInitialGeoPhiVel(geoPhiVel)
+  }, [geoT, geoR, phi, tVel, geoRVel, geoPhiVel, playState])
+
+  useEffect(() => {
+    if (playState !== "playing") return
+    const i = setInterval(() => {
+      const [
+        [newGeoT, newGeoR, newPhi],
+        [newTVel, newGeoRVel, newGeoPhiVel]
+      ] = geodesicStep([geoT, geoR, phi], [tVel, geoRVel, geoPhiVel], timeStep * timeScale)
+
+      setGeoT(newGeoT)
+      setGeoR(newGeoR)
+      setPhi(newPhi)
+
+      setTVel(newTVel)
+      setGeoRVel(newGeoRVel)
+      setGeoPhiVel(newGeoPhiVel)
+    }, interval * 1000)
+
+    return () => clearInterval(i)
+  }, [
+    geoT,
+    setGeoT,
+    geoR,
+    setGeoR,
+    phi,
+    setPhi,
+
+    tVel,
+    setTVel,
+    geoRVel,
+    setGeoRVel,
+    geoPhiVel,
+    setGeoPhiVel,
+
+    interval,
+    timeStep,
+    playState,
+    timeScale,
+  ])
+
+  const draw = useCallback((ctx: CanvasRenderingContext2D) => {
     const width = ctx.canvas.width
     const height = ctx.canvas.height
     const centerX = width / 2
@@ -90,24 +152,75 @@ export default function TwoD() {
       ctx.beginPath()
       ctx.lineWidth = 2
       ctx.strokeStyle = arrowColor
-      drawArrow(ctx, centerX, centerY, rUnit, 10, 2 * Math.PI * t / rotationPeriod)
+      //drawArrow(ctx, centerX, centerY, rUnit, 10, 2 * Math.PI * t / rotationPeriod)
       ctx.closePath()
     }
 
     ctx.beginPath()
     ctx.lineWidth = 1
     ctx.fillStyle = planetColor
-    ctx.arc(centerX + coords[1] * rUnit * Math.cos(coords[2]), centerY + coords[1] * rUnit * Math.sin(coords[2]), 20, 0, 2 * Math.PI)
+    // dividing by 2 because rs = 2M and unit = rs
+    ctx.arc(centerX + geoR / 2 * rUnit * Math.cos(phi), centerY + geoR / 2 * rUnit * Math.sin(phi), 20, 0, 2 * Math.PI)
     ctx.fill()
     ctx.closePath()
+  }, [geoR, phi])
 
-    const [newVelocities, newCoords] = geodesicStep(coords, velocities, dt / (lightSpeed ** 3 * 1 * gravityConstant) * 5e4)
+  return (
+    <div>
+      <div className="absolute top-4 right-4 flex gap-2">
+        <button onClick={() => setPlayState(prev => prev === "playing" ? "paused" : "playing")}><FontAwesomeIcon icon={playState !== "playing" ? faPlay : faPause} /></button>
+        <button onClick={() => {
+          setPlayState("stopped")
+          setGeoT(initialGeoT)
+          setGeoR(initialGeoR)
+          setPhi(initialPhi)
+          setTVel(initialTVel)
+          setGeoRVel(initialGeoRVel)
+          setGeoPhiVel(initialGeoPhiVel)
+        }}><FontAwesomeIcon icon={faStop} /></button>
+        <label className="flex gap-2">
+          Time scale:
+          <input value={timeScale} onChange={e => setTimeScale(+e.target.value)} />
+        </label>
+      </div>
+      <div className="absolute top-12 right-4 flex flex-col">
+        <BlockMath math={String.raw`\begin{gather*}
+          \begin{aligned}
+          t &= ${siT} & \frac{dt}{d\lambda} &= ${tVel} \\[1ex]
+          r &= ${siR} & \frac{dr}{d\lambda} &= ${siRVel} \\[1ex]
+          \phi &= ${phi} & \frac{d\phi}{d\lambda} &= ${siPhiVel} \\[1ex]
+          \end{aligned} \\
+          \lambda = ?
+        \end{gather*}`} />
+      </div>
+      <div className="absolute bottom-4 right-4 flex flex-col">
+        <label>
+          <input value={mass} onChange={e => setMass(+e.target.value)} />
+          <InlineMath math={String.raw`kg`} />
+        </label>
 
-    return {
-      coords: newCoords,
-      velocities: newVelocities,
-    }
-  }, [])
+        <label className="flex gap-2">
+          <InlineMath math={String.raw`r_0`} />
+          <input value={siR} onChange={e => setSiR(+e.target.value)} />
+          <InlineMath math={String.raw`m`} />
+        </label>
+        <label className="flex gap-2">
+          <InlineMath math={String.raw`\phi_0`} />
+          <input value={phi} onChange={e => setPhi(+e.target.value)} />
+        </label>
 
-  return <Canvas draw={draw} initialState={initialState} />
+        <label className="flex gap-2">
+          <InlineMath math={String.raw`\left.\frac{dr}{d\lambda}\right|_0`} />
+          <input value={siRVel} onChange={e => setSiRVel(+e.target.value)} />
+          <InlineMath math={String.raw`m\,s^{-1}`} />
+        </label>
+        <label className="flex gap-2">
+          <InlineMath math={String.raw`\left.\frac{d\phi}{d\lambda}\right|_0`} />
+          <input value={siPhiVel} onChange={e => setSiPhiVel(+e.target.value)} />
+          <InlineMath math={String.raw`s^{-1}`} />
+        </label>
+      </div>
+      <Canvas draw={draw} />
+    </div >
+  )
 }
