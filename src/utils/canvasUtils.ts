@@ -3,7 +3,7 @@ export function drawArrow(ctx: CanvasRenderingContext2D, x: number, y: number, l
   const tipXLocal = l * Math.cos(angle)
   const tipYLocal = l * Math.sin(angle)
   const tipX = x + tipXLocal
-  const tipY = y + tipYLocal
+  const tipY = y - tipYLocal // subtracting because positive y goes down
   const unitX = tipXLocal / l
   const unitY = tipYLocal / l
 
@@ -15,10 +15,10 @@ export function drawArrow(ctx: CanvasRenderingContext2D, x: number, y: number, l
 
   const lengthWOHead = l - headL
   const headOnLineX = x + lengthWOHead * Math.cos(angle)
-  const headOnLineY = y + lengthWOHead * Math.sin(angle)
-  const head1X = headOnLineX - unitY * headL
+  const headOnLineY = y - lengthWOHead * Math.sin(angle) // again y-positive is down
+  const head1X = headOnLineX + unitY * headL
   const head1Y = headOnLineY + unitX * headL
-  const head2X = headOnLineX + unitY * headL
+  const head2X = headOnLineX - unitY * headL
   const head2Y = headOnLineY - unitX * headL
   ctx.beginPath()
   ctx.moveTo(head1X, head1Y)
