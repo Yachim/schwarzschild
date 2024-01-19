@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Canvas from "../components/Canvas";
 import { drawArrow } from "../utils/canvasUtils";
-import { geodesicStep, timeVelocity } from "../utils/geodesics";
-import { timeConversionFactor, useFrequency, useLength, useTime, useVelocity } from "../utils/units";
+import { geodesicStep, getTimeVelocity } from "../utils/geodesics";
+import { timeConversionFactor, useFrequency, useLength, useSolarMass, useTime, useVelocity } from "../utils/units";
 import { BlockMath, InlineMath } from 'react-katex'
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPause, faPlay } from "@fortawesome/free-solid-svg-icons";
 import { faStop } from "@fortawesome/free-solid-svg-icons/faStop";
+import { getCircularOrbitVelocity } from "../utils/trajectoryUtils";
 
 const coordsColor = "#bfbaba"
 const rUnit = 75
@@ -18,24 +19,29 @@ const planetColor = "#0000ff"
 
 export default function TwoD() {
   const [playState, setPlayState] = useState<"playing" | "paused" | "stopped">("stopped")
-  const [mass, setMass] = useState(100)
+  const {
+    si: siMass,
+    solar: solarMass,
+    setSolar: setSolarMass,
+  } = useSolarMass(10)
   const [frequency, setFrequency] = useState(30)
   const [timeScale, setTimeScale] = useState(1)
   const interval = useMemo(() => 1 / frequency, [frequency])
-  const timeStep = useMemo(() => interval / timeConversionFactor(mass), [interval, mass])
+  const timeStep = useMemo(() => interval / timeConversionFactor(siMass), [interval, siMass])
+
+  const [properTime, setProperTime] = useState(0)
 
   const {
     si: siT,
-    setSi: setSiT,
     geo: geoT,
     setGeo: setGeoT,
-  } = useTime(0, mass)
+  } = useTime(0, siMass)
   const {
     si: siR,
     setSi: setSiR,
     geo: geoR,
     setGeo: setGeoR,
-  } = useLength(4, mass, true)
+  } = useLength(59085.5, siMass)
   const [phi, setPhi] = useState(0)
 
   const {
@@ -49,13 +55,12 @@ export default function TwoD() {
     setSi: setSiPhiVel,
     geo: geoPhiVel,
     setGeo: setGeoPhiVel,
-  } = useFrequency(0, mass)
-  const [tVel, setTVel] = useState(timeVelocity(geoR, [geoRVel, geoPhiVel]))
+  } = useFrequency(0, siMass)
+  const [tVel, setTVel] = useState(getTimeVelocity(geoR, [geoRVel, geoPhiVel]))
   useEffect(() => {
-    setTVel(timeVelocity(geoR, [geoRVel, geoPhiVel]))
+    setTVel(getTimeVelocity(geoR, [geoRVel, geoPhiVel]))
   }, [geoR, geoRVel, geoPhiVel])
 
-  const [initialGeoT, setInitialGeoT] = useState(0)
   const [initialGeoR, setInitialGeoR] = useState(0)
   const [initialPhi, setInitialPhi] = useState(0)
   const [initialTVel, setInitialTVel] = useState(0)
@@ -65,7 +70,6 @@ export default function TwoD() {
   useEffect(() => {
     if (playState !== "stopped") return
 
-    setInitialGeoT(geoT)
     setInitialGeoR(geoR)
     setInitialPhi(phi)
     setInitialTVel(tVel)
@@ -76,6 +80,7 @@ export default function TwoD() {
   useEffect(() => {
     if (playState !== "playing") return
     const i = setInterval(() => {
+      setProperTime(prev => prev + interval * timeScale)
       const [
         [newGeoT, newGeoR, newPhi],
         [newTVel, newGeoRVel, newGeoPhiVel]
@@ -160,7 +165,8 @@ export default function TwoD() {
     ctx.lineWidth = 1
     ctx.fillStyle = planetColor
     // dividing by 2 because rs = 2M and unit = rs
-    ctx.arc(centerX + geoR / 2 * rUnit * Math.cos(phi), centerY + geoR / 2 * rUnit * Math.sin(phi), 20, 0, 2 * Math.PI)
+    // subtracting y because the origin is at the top
+    ctx.arc(centerX + geoR / 2 * rUnit * Math.cos(phi), centerY - geoR / 2 * rUnit * Math.sin(phi), 20, 0, 2 * Math.PI)
     ctx.fill()
     ctx.closePath()
   }, [geoR, phi])
@@ -171,7 +177,8 @@ export default function TwoD() {
         <button onClick={() => setPlayState(prev => prev === "playing" ? "paused" : "playing")}><FontAwesomeIcon icon={playState !== "playing" ? faPlay : faPause} /></button>
         <button onClick={() => {
           setPlayState("stopped")
-          setGeoT(initialGeoT)
+          setProperTime(0)
+          setGeoT(0)
           setGeoR(initialGeoR)
           setPhi(initialPhi)
           setTVel(initialTVel)
@@ -182,21 +189,25 @@ export default function TwoD() {
           Time scale:
           <input value={timeScale} onChange={e => setTimeScale(+e.target.value)} />
         </label>
+        <label className="flex gap-2">
+          <input type="number" min="30" max="200" value={frequency} onChange={e => setFrequency(+e.target.value)} />
+          <InlineMath math={String.raw`Hz`} />
+        </label>
       </div>
       <div className="absolute top-12 right-4 flex flex-col">
         <BlockMath math={String.raw`\begin{gather*}
           \begin{aligned}
-          t &= ${siT} & \frac{dt}{d\lambda} &= ${tVel} \\[1ex]
-          r &= ${siR} & \frac{dr}{d\lambda} &= ${siRVel} \\[1ex]
-          \phi &= ${phi} & \frac{d\phi}{d\lambda} &= ${siPhiVel} \\[1ex]
+          t &= ${siT}\ s & \frac{dt}{d\lambda} &= ${tVel} \\[1ex]
+          r &= ${siR}\ m & \frac{dr}{d\lambda} &= ${siRVel}\ m\,s^{-1} \\[1ex]
+          \phi &= ${phi} & \frac{d\phi}{d\lambda} &= ${siPhiVel}\ s^{-1} \\[1ex]
           \end{aligned} \\
-          \lambda = ?
+          \lambda = ${properTime}\ s
         \end{gather*}`} />
       </div>
       <div className="absolute bottom-4 right-4 flex flex-col">
         <label>
-          <input value={mass} onChange={e => setMass(+e.target.value)} />
-          <InlineMath math={String.raw`kg`} />
+          <input value={solarMass} onChange={e => setSolarMass(+e.target.value)} />
+          <InlineMath math={String.raw`M_{\odot}`} />
         </label>
 
         <label className="flex gap-2">
@@ -218,6 +229,7 @@ export default function TwoD() {
           <InlineMath math={String.raw`\left.\frac{d\phi}{d\lambda}\right|_0`} />
           <input value={siPhiVel} onChange={e => setSiPhiVel(+e.target.value)} />
           <InlineMath math={String.raw`s^{-1}`} />
+          <button onClick={() => setGeoPhiVel(getCircularOrbitVelocity(geoR))}>Set to orbital velocity</button>
         </label>
       </div>
       <Canvas draw={draw} />
