@@ -16,3 +16,7 @@ export function getCircularGeostationaryOrbitR(t: number) {
 export function getCircularGeostationaryOrbitPhiVelocity(t: number) {
   return Math.PI * 2 / t
 }
+
+export function getEscapeVelocity(r: number) {
+  return Math.sqrt(2 / r)
+}

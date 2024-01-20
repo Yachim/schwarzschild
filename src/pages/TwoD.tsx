@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Canvas from "../components/Canvas";
 import { drawArrow } from "../utils/canvasUtils";
 import { geodesicStep, getTimeVelocity } from "../utils/geodesics";
@@ -7,13 +7,11 @@ import { BlockMath, InlineMath } from 'react-katex'
 import { FontAwesomeIcon } from "@fortawesome/react-fontawesome";
 import { faPause, faPlay } from "@fortawesome/free-solid-svg-icons";
 import { faStop } from "@fortawesome/free-solid-svg-icons/faStop";
-import { getCircularGeostationaryOrbitPhiVelocity, getCircularGeostationaryOrbitR, getCircularOrbitPhiVelocity } from "../utils/trajectoryUtils";
+import { getCircularGeostationaryOrbitPhiVelocity, getCircularGeostationaryOrbitR, getCircularOrbitPhiVelocity, getEscapeVelocity } from "../utils/trajectoryUtils";
+import { debug } from "../utils/constants";
 
 const coordsColor = "#bfbaba"
 const rUnit = 75
-const bhColor = "#000000"
-const arrowColor = "#00ff00"
-const planetColor = "#0000ff"
 const scaleFactor = 2
 
 export default function TwoD() {
@@ -26,7 +24,19 @@ export default function TwoD() {
   const [frequency, setFrequency] = useState(30)
   const [timeScale, setTimeScale] = useState(1)
   const interval = useMemo(() => 1 / frequency, [frequency])
-  const timeStep = useMemo(() => interval / timeConversionFactor(siMass), [interval, siMass])
+  const timeStep = useMemo(() => interval / timeConversionFactor(siMass) * timeScale, [interval, siMass, timeScale])
+  const [trailPoints, setTrailPoints] = useState<[number, number, number][]>([]) // [r, phi, time (for decay)]
+
+  const [bhColor, setBhColor] = useState("#000000")
+  const [arrowColor, setArrowColor] = useState("#00ff00")
+  const [planetColor, setPlanetColor] = useState("#0000ff")
+  const [planetTrailColor, setPlanetTrailColor] = useState("#0000f0")
+
+  useEffect(() => {
+    if (debug) {
+      console.log("Geometrized time step: ", timeStep)
+    }
+  }, [timeStep])
 
   const [isBhSpinning, setIsBhSpinning] = useState(false)
   const { si: siBhRotationPeriod, setSi: setSiBhRotationPeriod, geo: geoBhRotationPeriod } = useTime(2, siMass)
@@ -73,6 +83,9 @@ export default function TwoD() {
 
   const [scale, setScale] = useState(1)
 
+  const [trailEnabled, setTrailEnabled] = useState(true)
+  const [trailDecay, setTrailDecay] = useState(10) // 0 = doesnt decay
+
   useEffect(() => {
     if (playState !== "stopped") return
 
@@ -83,6 +96,18 @@ export default function TwoD() {
     setInitialGeoPhiVel(geoPhiVel)
   }, [geoT, geoR, phi, tVel, geoRVel, geoPhiVel, playState])
 
+  const [clampR, setClampR] = useState(true)
+
+  useEffect(() => {
+    const i = setInterval(() => {
+      if (trailDecay > 0) {
+        setTrailPoints(prev => [...prev.filter(([_r, _phi, t]) => Date.now() / 1000 - t < trailDecay)])
+      }
+    }, interval * 1000)
+
+    return () => clearInterval(i)
+  }, [trailDecay, interval])
+
   useEffect(() => {
     if (playState !== "playing") return
     const i = setInterval(() => {
@@ -92,7 +117,11 @@ export default function TwoD() {
       const [
         [newGeoT, newGeoR, newPhi],
         [newTVel, newGeoRVel, newGeoPhiVel]
-      ] = geodesicStep([geoT, geoR, phi], [tVel, geoRVel, geoPhiVel], timeStep * timeScale)
+      ] = geodesicStep([geoT, geoR, phi], [tVel, geoRVel, geoPhiVel], timeStep, clampR)
+
+      if (trailEnabled) {
+        setTrailPoints(prev => [...prev, [newGeoR, newPhi, Date.now() / 1000]])
+      }
 
       setGeoT(newGeoT)
       setGeoR(newGeoR)
@@ -125,8 +154,25 @@ export default function TwoD() {
     timeStep,
     playState,
     timeScale,
+    clampR,
+    trailEnabled,
+    trailDecay
   ])
 
+  const {
+    si: siBhRadius,
+    setSi: setSiBhRadius,
+    geo: geoBhRadius,
+    setGeo: setGeoBhRadius
+  } = useLength(29540, siMass)
+  const {
+    si: siPlanetRadius,
+    setSi: setSiPlanetRadius,
+    geo: geoPlanetRadius,
+  } = useLength(10000, siMass)
+
+  // dividing by 2 because rs = 2M and unit = rs
+  // subtracting y because positive y goes down
   const draw = useCallback((ctx: CanvasRenderingContext2D) => {
     const width = ctx.canvas.width
     const height = ctx.canvas.height
@@ -158,7 +204,7 @@ export default function TwoD() {
     ctx.beginPath()
     ctx.strokeStyle = bhColor
     ctx.fillStyle = bhColor
-    ctx.arc(centerX, centerY, scale * rUnit, 0, Math.PI * 2)
+    ctx.arc(centerX, centerY, geoBhRadius / 2 * scale * rUnit, 0, Math.PI * 2)
     ctx.fill()
     ctx.closePath()
 
@@ -167,7 +213,7 @@ export default function TwoD() {
       ctx.beginPath()
       ctx.lineWidth = 2
       ctx.strokeStyle = arrowColor
-      drawArrow(ctx, centerX, centerY, scale * rUnit, 10, bhRotationArrowAngle)
+      drawArrow(ctx, centerX, centerY, geoBhRadius / 2 * scale * rUnit, 10, bhRotationArrowAngle)
       ctx.closePath()
     }
 
@@ -175,104 +221,231 @@ export default function TwoD() {
     ctx.beginPath()
     ctx.lineWidth = 1
     ctx.fillStyle = planetColor
-    // dividing by 2 because rs = 2M and unit = rs
-    // subtracting y because positive y goes down
-    ctx.arc(centerX + scale * geoR / 2 * rUnit * Math.cos(phi), centerY - scale * geoR / 2 * rUnit * Math.sin(phi), scale * 20, 0, 2 * Math.PI)
+    ctx.arc(
+      centerX + scale * geoR / 2 * rUnit * Math.cos(phi),
+      centerY - scale * geoR / 2 * rUnit * Math.sin(phi),
+      geoPlanetRadius / 2 * scale * rUnit,
+      0, 2 * Math.PI)
     ctx.fill()
     ctx.closePath()
-  }, [geoR, phi, isBhSpinning, bhRotationArrowAngle, scale])
+
+    // trail
+    if (trailEnabled) {
+      ctx.beginPath()
+      ctx.strokeStyle = planetTrailColor
+      ctx.lineWidth = 2
+      trailPoints.forEach(([r, phi]) => {
+        ctx.lineTo(
+          centerX + scale * r / 2 * rUnit * Math.cos(phi),
+          centerY - scale * r / 2 * rUnit * Math.sin(phi)
+        )
+      })
+      ctx.stroke()
+      ctx.closePath()
+    }
+  }, [
+    geoR,
+    phi,
+    isBhSpinning,
+    bhRotationArrowAngle,
+    scale,
+    geoBhRadius,
+    geoPlanetRadius,
+    trailPoints,
+    trailEnabled,
+    bhColor,
+    planetColor,
+    arrowColor,
+    planetTrailColor
+  ])
+
+  const elementRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const element = elementRef.current!
+
+    function handleWheel(e: WheelEvent) {
+      setScale(prev => prev * (scaleFactor ** -Math.sign(e.deltaY)))
+    }
+
+    element.addEventListener("wheel", handleWheel)
+
+    return () => element.removeEventListener("wheel", handleWheel)
+  }, [elementRef])
+
+  const [openedMenu, setOpenedMenu] = useState<"style" | "mechanics">("style")
 
   return (
     <div>
-      <div className="absolute top-4 right-4 flex gap-2">
-        <button onClick={() => setPlayState(prev => prev === "playing" ? "paused" : "playing")}><FontAwesomeIcon icon={playState !== "playing" ? faPlay : faPause} /></button>
-        <button onClick={() => {
-          setPlayState("stopped")
-          setBhRotationArrowAngle(0)
-          setProperTime(0)
-          setGeoT(0)
-          setGeoR(initialGeoR)
-          setPhi(initialPhi)
-          setTVel(initialTVel)
-          setGeoRVel(initialGeoRVel)
-          setGeoPhiVel(initialGeoPhiVel)
-        }}><FontAwesomeIcon icon={faStop} /></button>
-        <label className="flex gap-2">
-          Time scale:
-          <input value={timeScale} onChange={e => setTimeScale(+e.target.value)} />
-        </label>
-        <label className="flex gap-2">
-          <input type="number" min="30" max="200" value={frequency} onChange={e => setFrequency(+e.target.value)} />
-          <InlineMath math={String.raw`Hz`} />
-        </label>
-        <button onClick={() => setScale(prev => prev * scaleFactor)}>+</button>
-        <button onClick={() => setScale(prev => prev / scaleFactor)}>-</button>
+      <div className="absolute p-4 flex flex-col gap-4 bg-gray-100 bg-opacity-75 rounded-br-xl">
+        <div className="flex flex-col gap-2">
+          <div className="flex gap-2">
+            <button onClick={() => {
+              if (playState === "stopped" && trailEnabled) {
+                setTrailPoints([[geoR, phi, Date.now() / 1000]])
+              }
+              setPlayState(prev => prev === "playing" ? "paused" : "playing")
+            }}><FontAwesomeIcon icon={playState !== "playing" ? faPlay : faPause} /></button>
+            <button onClick={() => {
+              setPlayState("stopped")
+              setTrailPoints([])
+              setBhRotationArrowAngle(0)
+              setProperTime(0)
+              setGeoT(0)
+              setGeoR(initialGeoR)
+              setPhi(initialPhi)
+              setTVel(initialTVel)
+              setGeoRVel(initialGeoRVel)
+              setGeoPhiVel(initialGeoPhiVel)
+            }}><FontAwesomeIcon icon={faStop} /></button>
+          </div>
+          <label className="flex gap-2">
+            <input value={timeScale} onChange={e => setTimeScale(+e.target.value)} />
+            x
+          </label>
+          <label className="flex gap-2">
+            <input type="number" min="30" max="200" value={frequency} onChange={e => setFrequency(+e.target.value)} />
+            <InlineMath math={String.raw`Hz`} />
+          </label>
+        </div>
+
+        {playState === "stopped" &&
+          <>
+            <span className="flex gap-2">
+              <button className={openedMenu === "style" ? "underline" : ""} onClick={() => setOpenedMenu("style")}>Style</button>
+              <button className={openedMenu === "mechanics" ? "underline" : ""} onClick={() => setOpenedMenu("mechanics")}>Mechanics</button>
+            </span>
+
+            <div className="flex flex-col gap-2">
+              {openedMenu === "style" &&
+                <>
+                  <label className="flex gap-2">
+                    Black hole radius:
+                    <input value={siBhRadius} onChange={e => setSiBhRadius(+e.target.value)} />
+                    <InlineMath math={String.raw`m`} />
+                  </label>
+                  <label className="flex gap-2">
+                    Black hole color:
+                    <input type="color" value={bhColor} onChange={e => setBhColor(e.target.value)} />
+                  </label>
+                  <label className="flex gap-2">
+                    Planet radius:
+                    <input value={siPlanetRadius} onChange={e => setSiPlanetRadius(+e.target.value)} />
+                    <InlineMath math={String.raw`m`} />
+                  </label>
+                  <label className="flex gap-2">
+                    Planet color:
+                    <input type="color" value={planetColor} onChange={e => setPlanetColor(e.target.value)} />
+                  </label>
+
+                  <label className="flex gap-2">
+                    Trail: <input type="checkbox" checked={trailEnabled} onChange={e => { setTrailEnabled(e.target.checked) }} />
+                  </label>
+                  {trailEnabled &&
+                    <>
+                      <label className="flex gap-2">
+                        Trail decay:
+                        <input value={trailDecay} onChange={e => setTrailDecay(+e.target.value)} />
+                        <InlineMath math={String.raw`s`} />
+                      </label>
+                      <label className="flex gap-2">
+                        Trail color:
+                        <input type="color" value={planetTrailColor} onChange={e => setPlanetTrailColor(e.target.value)} />
+                      </label>
+                    </>
+                  }
+                </>
+              }
+
+              {openedMenu === "mechanics" &&
+                <>
+                  <label className="flex gap-2">
+                    Spinning: <input type="checkbox" checked={isBhSpinning} onChange={e => { setIsBhSpinning(e.target.checked) }} />
+                  </label>
+                  {isBhSpinning &&
+                    <>
+                      <label className="flex gap-2">
+                        <InlineMath math="T_M " />
+                        <input value={siBhRotationPeriod} onChange={e => setSiBhRotationPeriod(+e.target.value)} />
+                        <InlineMath math={String.raw`s`} />
+                      </label>
+                      <label className="flex gap-2">
+                        Arrow color:
+                        <input type="color" value={arrowColor} onChange={e => setArrowColor(e.target.value)} />
+                      </label>
+                    </>
+                  }
+
+                  <label className="flex gap-2">
+                    <span>Clamp <InlineMath math={String.raw`r \approx r_s`} />:</span>
+                    <input type="checkbox" checked={clampR} onChange={e => { setClampR(e.target.checked) }} />
+                  </label>
+
+                  <label className="flex gap-2">
+                    <InlineMath math="M" />
+                    <input value={solarMass} onChange={e => setSolarMass(+e.target.value)} />
+                    <InlineMath math={String.raw`M_{\odot}`} />
+                  </label>
+
+                  <label className="flex gap-2">
+                    <InlineMath math={String.raw`r_0`} />
+                    <input value={siR} onChange={e => setSiR(+e.target.value)} />
+                    <InlineMath math={String.raw`m`} />
+                  </label>
+                  <label className="flex gap-2">
+                    <InlineMath math={String.raw`\phi_0`} />
+                    <input value={phi} onChange={e => setPhi(+e.target.value)} />
+                  </label>
+
+                  <label className="flex gap-2">
+                    <InlineMath math={String.raw`\left.\frac{dr}{d\lambda}\right|_0`} />
+                    <input value={siRVel} onChange={e => setSiRVel(+e.target.value)} />
+                    <InlineMath math={String.raw`m\,s^{-1}`} />
+                  </label>
+                  <label className="flex gap-2">
+                    <InlineMath math={String.raw`\left.\frac{d\phi}{d\lambda}\right|_0`} />
+                    <input value={siPhiVel} onChange={e => setSiPhiVel(+e.target.value)} />
+                    <InlineMath math={String.raw`s^{-1}`} />
+                  </label>
+
+                  <button onClick={() => setGeoBhRadius(2)}>
+                    Set black hole radius equal to <InlineMath math={String.raw`r_s`} />
+                  </button>
+                  <button onClick={() => setGeoPhiVel(getCircularOrbitPhiVelocity(geoR))}>
+                    Set <InlineMath math={String.raw`\left.\frac{d\phi}{d\lambda}\right|_0`} /> to orbital velocity
+                  </button>
+                  <button onClick={() => setGeoRVel(getEscapeVelocity(geoR))}>
+                    Set <InlineMath math={String.raw`\left.\frac{dr}{d\lambda}\right|_0`} /> to escape velocity
+                  </button>
+                  {isBhSpinning &&
+                    <>
+                      <button onClick={() => {
+                        setGeoR(getCircularGeostationaryOrbitR(geoBhRotationPeriod))
+                        setGeoPhiVel(getCircularGeostationaryOrbitPhiVelocity(geoBhRotationPeriod))
+                      }}>
+                        Set <InlineMath math={String.raw`r_0`} /> and <InlineMath math={String.raw`\left.\frac{d\phi}{d\lambda}\right|_0`} /> to have geostationary circular orbit
+                      </button>
+                    </>
+                  }
+                </>
+              }
+            </div>
+          </>
+        }
       </div>
-      <div className="absolute top-12 right-4 flex flex-col">
+      <div className="absolute bottom-0 p-4 flex flex-col rounded-tr-xl bg-gray-100 bg-opacity-75">
         <BlockMath math={String.raw`\begin{gather*}
           \begin{aligned}
-          t &= ${siT}\ s & \frac{dt}{d\lambda} &= ${tVel} \\[1ex]
-          r &= ${siR}\ m & \frac{dr}{d\lambda} &= ${siRVel}\ m\,s^{-1} \\[1ex]
-          \phi &= ${phi} & \frac{d\phi}{d\lambda} &= ${siPhiVel}\ s^{-1} \\[1ex]
+          t &= ${Math.floor(siT * 100) / 100}\ s & \frac{dt}{d\lambda} &= ${Math.floor(tVel * 100) / 100} \\[1ex]
+          r &= ${Math.floor(siR * 100) / 100}\ m & \frac{dr}{d\lambda} &= ${Math.floor(siRVel * 100) / 100}\ m\,s^{-1} \\[1ex]
+          \phi &= ${Math.floor(phi * 100) / 100} & \frac{d\phi}{d\lambda} &= ${Math.floor(siPhiVel * 100) / 100}\ s^{-1} \\[1ex]
           \end{aligned} \\
-          \lambda = ${properTime}\ s
+          \lambda = ${Math.floor(properTime * 100) / 100}\ s
         \end{gather*}`} />
+        <InlineMath math={String.raw`\textrm{unit} = ${scale === 1 ? "" : String.raw`${1 / scale}\ `}r_s = ${Math.floor(1 / scale * lengthConversionFactor(siMass) * 2 * 100) / 100}\ m`} />
       </div>
-      {playState === "stopped" &&
-        <div className="absolute bottom-4 right-4 flex flex-col">
-          <label>
-            Spinning: <input type="checkbox" checked={isBhSpinning} onChange={e => { setIsBhSpinning(e.target.checked) }} />
-          </label>
-          {isBhSpinning &&
-            <label className="flex gap-2">
-              Rotation period:
-              <input value={siBhRotationPeriod} onChange={e => setSiBhRotationPeriod(+e.target.value)} />
-              <InlineMath math={String.raw`s`} />
-            </label>
-          }
-
-          <label className="flex gap-2">
-            <input value={solarMass} onChange={e => setSolarMass(+e.target.value)} />
-            <InlineMath math={String.raw`M_{\odot}`} />
-          </label>
-
-          <label className="flex gap-2">
-            <InlineMath math={String.raw`r_0`} />
-            <input value={siR} onChange={e => setSiR(+e.target.value)} />
-            <InlineMath math={String.raw`m`} />
-          </label>
-          <label className="flex gap-2">
-            <InlineMath math={String.raw`\phi_0`} />
-            <input value={phi} onChange={e => setPhi(+e.target.value)} />
-          </label>
-
-          <label className="flex gap-2">
-            <InlineMath math={String.raw`\left.\frac{dr}{d\lambda}\right|_0`} />
-            <input value={siRVel} onChange={e => setSiRVel(+e.target.value)} />
-            <InlineMath math={String.raw`m\,s^{-1}`} />
-          </label>
-          <label className="flex gap-2">
-            <InlineMath math={String.raw`\left.\frac{d\phi}{d\lambda}\right|_0`} />
-            <input value={siPhiVel} onChange={e => setSiPhiVel(+e.target.value)} />
-            <InlineMath math={String.raw`s^{-1}`} />
-          </label>
-          <button onClick={() => setGeoPhiVel(getCircularOrbitPhiVelocity(geoR))}>
-            Set <InlineMath math={String.raw`\left.\frac{d\phi}{d\lambda}\right|_0`} /> to orbital velocity
-          </button>
-          {isBhSpinning &&
-            <button onClick={() => {
-              setGeoR(getCircularGeostationaryOrbitR(geoBhRotationPeriod))
-              setGeoPhiVel(getCircularGeostationaryOrbitPhiVelocity(geoBhRotationPeriod))
-            }}>
-              Set <InlineMath math={String.raw`r_0`} /> and <InlineMath math={String.raw`\left.\frac{d\phi}{d\lambda}\right|_0`} /> to have geostationary circular orbit
-            </button>
-          }
-        </div>
-      }
-      <div className="absolute bottom-4 left-4">
-        <BlockMath math={String.raw`\textrm{unit} = ${scale}\ r_s = ${scale * lengthConversionFactor(siMass) * 2}\ m`} />
-      </div>
-      <Canvas draw={draw} />
+      <div ref={elementRef}>
+        <Canvas draw={draw} />
+      </div >
     </div >
   )
 }
