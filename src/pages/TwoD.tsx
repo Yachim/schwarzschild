@@ -9,6 +9,7 @@ import { faPause, faPlay } from "@fortawesome/free-solid-svg-icons";
 import { faStop } from "@fortawesome/free-solid-svg-icons/faStop";
 import { getCircularGeostationaryOrbitPhiVelocity, getCircularGeostationaryOrbitR, getCircularOrbitPhiVelocity, getEscapeVelocity } from "../utils/trajectoryUtils";
 import { debug } from "../utils/constants";
+import { clampAngle } from "../utils/generalUtils";
 
 const coordsColor = "#bfbaba"
 const rUnit = 75
@@ -81,6 +82,8 @@ export default function TwoD() {
   const [initialGeoRVel, setInitialGeoRVel] = useState(0)
   const [initialGeoPhiVel, setInitialGeoPhiVel] = useState(0)
 
+  // TODO: for now, changing mass keeps scale in r_s constant
+  // should it be constant for meters instead?
   const [scale, setScale] = useState(1)
 
   const [trailEnabled, setTrailEnabled] = useState(true)
@@ -165,6 +168,9 @@ export default function TwoD() {
     geo: geoBhRadius,
     setGeo: setGeoBhRadius
   } = useLength(29540, siMass)
+  useEffect(() => {
+    if (geoBhRadius < 2) setGeoBhRadius(2)
+  }, [geoBhRadius, setGeoBhRadius])
   const {
     si: siPlanetRadius,
     setSi: setSiPlanetRadius,
@@ -234,7 +240,11 @@ export default function TwoD() {
       ctx.beginPath()
       ctx.strokeStyle = planetTrailColor
       ctx.lineWidth = 2
-      trailPoints.forEach(([r, phi]) => {
+      trailPoints.forEach(([r, phi, t]) => {
+        console.log("a", Date.now() / 1000 - t)
+        console.log("b", (Date.now() / 1000 - t) * 2 / trailDecay)
+        ctx.globalAlpha = Math.tanh(-(Date.now() / 1000 - t) * 2 / trailDecay) + 1
+        console.log("c", ctx.globalAlpha)
         ctx.lineTo(
           centerX + scale * r / 2 * rUnit * Math.cos(phi),
           centerY - scale * r / 2 * rUnit * Math.sin(phi)
@@ -242,6 +252,7 @@ export default function TwoD() {
       })
       ctx.stroke()
       ctx.closePath()
+      ctx.globalAlpha = 1
     }
   }, [
     geoR,
@@ -256,7 +267,8 @@ export default function TwoD() {
     bhColor,
     planetColor,
     arrowColor,
-    planetTrailColor
+    planetTrailColor,
+    trailDecay,
   ])
 
   const elementRef = useRef<HTMLDivElement>(null)
@@ -273,6 +285,23 @@ export default function TwoD() {
   }, [elementRef])
 
   const [openedMenu, setOpenedMenu] = useState<"style" | "mechanics">("style")
+
+  const [scaleChanged, setScaleChanged] = useState(false)
+
+  const isMounting = useRef(false) // to prevent flash on render
+  useEffect(() => {
+    isMounting.current = true
+  }, [])
+
+  useEffect(() => {
+    if (isMounting.current) {
+      isMounting.current = false
+      return
+    }
+    setScaleChanged(true)
+    const t = setTimeout(() => setScaleChanged(false), 1000)
+    return () => clearTimeout(t)
+  }, [siMass])
 
   return (
     <div>
@@ -310,7 +339,8 @@ export default function TwoD() {
 
         {playState === "stopped" &&
           <>
-            <span className="flex gap-2">
+            <hr className="text-black" />
+            <span className="flex gap-4">
               <button className={openedMenu === "style" ? "underline" : ""} onClick={() => setOpenedMenu("style")}>Style</button>
               <button className={openedMenu === "mechanics" ? "underline" : ""} onClick={() => setOpenedMenu("mechanics")}>Mechanics</button>
             </span>
@@ -323,6 +353,11 @@ export default function TwoD() {
                     <input value={siBhRadius} onChange={e => setSiBhRadius(+e.target.value)} />
                     <InlineMath math={String.raw`m`} />
                   </label>
+                  {geoBhRadius !== 2 &&
+                    <button onClick={() => setGeoBhRadius(2)}>
+                      Set black hole radius equal to <InlineMath math={String.raw`r_s`} />
+                    </button>
+                  }
                   <label className="flex gap-2">
                     Black hole color:
                     <input type="color" value={bhColor} onChange={e => setBhColor(e.target.value)} />
@@ -355,7 +390,6 @@ export default function TwoD() {
                   }
                 </>
               }
-
               {openedMenu === "mechanics" &&
                 <>
                   <label className="flex gap-2">
@@ -393,7 +427,7 @@ export default function TwoD() {
                   </label>
                   <label className="flex gap-2">
                     <InlineMath math={String.raw`\phi_0`} />
-                    <input value={phi} onChange={e => setPhi(+e.target.value)} />
+                    <input min={0} max={2 * Math.PI} value={phi} onChange={e => setPhi(+e.target.value)} />
                   </label>
 
                   <label className="flex gap-2">
@@ -406,10 +440,6 @@ export default function TwoD() {
                     <input value={siPhiVel} onChange={e => setSiPhiVel(+e.target.value)} />
                     <InlineMath math={String.raw`s^{-1}`} />
                   </label>
-
-                  <button onClick={() => setGeoBhRadius(2)}>
-                    Set black hole radius equal to <InlineMath math={String.raw`r_s`} />
-                  </button>
                   <button onClick={() => setGeoPhiVel(getCircularOrbitPhiVelocity(geoR))}>
                     Set <InlineMath math={String.raw`\left.\frac{d\phi}{d\lambda}\right|_0`} /> to orbital velocity
                   </button>
@@ -432,16 +462,19 @@ export default function TwoD() {
           </>
         }
       </div>
-      <div className="absolute bottom-0 p-4 flex flex-col rounded-tr-xl bg-gray-100 bg-opacity-75">
+      <div className="absolute top-0 right-0 p-4 flex flex-col rounded-tr-xl bg-gray-100 bg-opacity-75">
         <BlockMath math={String.raw`\begin{gather*}
           \begin{aligned}
           t &= ${Math.floor(siT * 100) / 100}\ s & \frac{dt}{d\lambda} &= ${Math.floor(tVel * 100) / 100} \\[1ex]
           r &= ${Math.floor(siR * 100) / 100}\ m & \frac{dr}{d\lambda} &= ${Math.floor(siRVel * 100) / 100}\ m\,s^{-1} \\[1ex]
-          \phi &= ${Math.floor(phi * 100) / 100} & \frac{d\phi}{d\lambda} &= ${Math.floor(siPhiVel * 100) / 100}\ s^{-1} \\[1ex]
+          \phi &= ${Math.floor(clampAngle(phi) * 100) / 100} & \frac{d\phi}{d\lambda} &= ${Math.floor(siPhiVel * 100) / 100}\ s^{-1} \\[1ex]
           \end{aligned} \\
           \lambda = ${Math.floor(properTime * 100) / 100}\ s
         \end{gather*}`} />
-        <InlineMath math={String.raw`\textrm{unit} = ${scale === 1 ? "" : String.raw`${1 / scale}\ `}r_s = ${Math.floor(1 / scale * lengthConversionFactor(siMass) * 2 * 100) / 100}\ m`} />
+        <span className={scaleChanged ? "text-red-500" : "transition-colors duration-1000"}>
+          <BlockMath math={String.raw`\textrm{unit} = ${scale === 1 ? "" : String.raw`${1 / scale}\ `}r_s = ${Math.floor(1 / scale * lengthConversionFactor(siMass) * 2 * 100) / 100}\ m`} />
+        </span>
+        <button onClick={() => setScale(1)}>Reset scale</button>
       </div>
       <div ref={elementRef}>
         <Canvas draw={draw} />
