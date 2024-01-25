@@ -240,11 +240,7 @@ export default function TwoD() {
       ctx.beginPath()
       ctx.strokeStyle = planetTrailColor
       ctx.lineWidth = 2
-      trailPoints.forEach(([r, phi, t]) => {
-        console.log("a", Date.now() / 1000 - t)
-        console.log("b", (Date.now() / 1000 - t) * 2 / trailDecay)
-        ctx.globalAlpha = Math.tanh(-(Date.now() / 1000 - t) * 2 / trailDecay) + 1
-        console.log("c", ctx.globalAlpha)
+      trailPoints.forEach(([r, phi, _t]) => {
         ctx.lineTo(
           centerX + scale * r / 2 * rUnit * Math.cos(phi),
           centerY - scale * r / 2 * rUnit * Math.sin(phi)
@@ -252,7 +248,6 @@ export default function TwoD() {
       })
       ctx.stroke()
       ctx.closePath()
-      ctx.globalAlpha = 1
     }
   }, [
     geoR,
@@ -268,7 +263,6 @@ export default function TwoD() {
     planetColor,
     arrowColor,
     planetTrailColor,
-    trailDecay,
   ])
 
   const elementRef = useRef<HTMLDivElement>(null)
